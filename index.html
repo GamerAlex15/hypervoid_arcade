@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Star Guardian</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#00ffcc" />
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background: #050505;
+      color: #fff;
+      overflow: hidden;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    canvas {
+      display: block;
+      touch-action: none;
+    }
+
+    #ui-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+
+    .hud {
+      position: absolute;
+      top: env(safe-area-inset-top, 10px);
+      width: 100%;
+      padding: 0 20px;
+      display: flex;
+      justify-content: space-between;
+      font-family: monospace;
+      font-size: 1.2rem;
+      color: #00ffcc;
+      text-shadow: 0 0 8px rgba(0, 255, 204, 0.4);
+    }
+
+    .btn {
+      pointer-events: auto;
+      background: rgba(0,255,204,.2);
+      border: 2px solid #00ffcc;
+      padding: 16px 32px;
+      border-radius: 8px;
+      color: #00ffcc;
+      font-weight: bold;
+      font-size: 1.5rem;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .btn:active {
+      background:#00ffcc;
+      color:#000;
+      transform: scale(0.95);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HUD -->
+  <div class="hud">
+    <div>SCORE: <span id="score">0</span></div>
+    <div>LIVES: <span id="lives">3</span></div>
+  </div>
+
+  <!-- UI Overlay -->
+  <div id="ui-overlay">
+    <div id="start-screen" class="text-center">
+      <h1 class="text-5xl font-black text-cyan-400 mb-4 italic">STAR GUARDIAN</h1>
+      <p class="text-gray-400 mb-8 tracking-widest uppercase text-sm">Drag to Move • Auto Fire</p>
+      <button class="btn" onclick="startGame()">Start</button>
+    </div>
+
+    <div id="game-over" class="hidden text-center">
+      <h2 class="text-5xl font-black text-red-500 mb-4">MISSION FAILED</h2>
+      <p id="final-score" class="text-xl mb-8 font-mono"></p>
+      <button class="btn" onclick="startGame()">Retry</button>
+    </div>
+  </div>
+
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const scoreEl = document.getElementById("score");
+    const livesEl = document.getElementById("lives");
+    const startScreen = document.getElementById("start-screen");
+    const gameOverScreen = document.getElementById("game-over");
+    const finalScoreEl = document.getElementById("final-score");
+
+    let gameState = "START";
+    let score = 0;
+    let lives = 3;
+    let animationId;
+    let lastTime = 0;
+    let fireTimer = 0;
+
+    let player, invaders, projectiles, particles, stars;
+    let invaderDirection = 1;
+    let touchX = null;
+
+    const PLAYER_SPEED = 7;
+    const FIRE_RATE = 350;
+    const INVADER_SPEED = 0.7;
+    const INVADER_ROWS = 3;
+    const INVADER_COLS = 5;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      if (player) player.y = canvas.height - 100;
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    // Pointer Events (Unified Touch/Mouse)
+   window.addEventListener("pointerdown", e => {
+    if (gameState === "PLAYING") {
+        touchX = e.clientX;
+    }
+});
+
+window.addEventListener("pointermove", e => {
+    if (gameState === "PLAYING" && touchX !== null) {
+        touchX = e.clientX;
+    }
+});
+
+window.addEventListener("pointerup", () => {
+    touchX = null;
+});
+
+
+    class Player {
+      constructor() {
+        this.width = 44;
+        this.height = 44;
+        this.x = canvas.width / 2 - this.width / 2;
+        this.y = canvas.height - 100;
+      }
+      update(delta) {
+        if (touchX !== null) {
+          const target = touchX - this.width / 2;
+          this.x += (target - this.x) * 0.2;
+        }
+        this.x = Math.max(0, Math.min(this.x, canvas.width - this.width));
+
+        fireTimer -= delta;
+        if (fireTimer <= 0) {
+          projectiles.push(new Projectile(this.x + this.width / 2, this.y, -1, "#00ffcc"));
+          fireTimer = FIRE_RATE;
+        }
+      }
+      draw() {
+        ctx.fillStyle = "#00ffcc";
+        ctx.beginPath();
+        ctx.moveTo(this.x + this.width/2, this.y);
+        ctx.lineTo(this.x + this.width, this.y + this.height);
+        ctx.lineTo(this.x + this.width/2, this.y + this.height - 8);
+        ctx.lineTo(this.x, this.y + this.height);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    class Invader {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.width = 30;
+        this.height = 30;
+      }
+      update(dx) { this.x += dx; }
+      draw() {
+        ctx.fillStyle = "#ff3366";
+        ctx.fillRect(this.x, this.y, this.width, this.height);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(this.x + 5, this.y + 8, 5, 5);
+        ctx.fillRect(this.x + 20, this.y + 8, 5, 5);
+      }
+    }
+
+    class Projectile {
+      constructor(x, y, dir, color) {
+        this.x = x;
+        this.y = y;
+        this.dir = dir;
+        this.color = color;
+        this.speed = 9;
+      }
+      update(delta) { this.y += this.speed * this.dir * (delta / 16.6); }
+      draw() { ctx.fillStyle = this.color; ctx.fillRect(this.x - 2, this.y, 4, 14); }
+    }
+
+    class Particle {
+      constructor(x, y, color) {
+        this.x = x; this.y = y;
+        this.vx = (Math.random() - 0.5) * 6;
+        this.vy = (Math.random() - 0.5) * 6;
+        this.alpha = 1;
+        this.color = color;
+      }
+      update() { this.x += this.vx; this.y += this.vy; this.alpha -= 0.03; }
+      draw() {
+        ctx.globalAlpha = this.alpha;
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, 3, 3);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function spawnInvaders() {
+      invaders = [];
+      const spacing = Math.min(canvas.width / 6, 60);
+      const startX = (canvas.width - (INVADER_COLS - 1) * spacing - 30) / 2;
+      for (let r = 0; r < INVADER_ROWS; r++) {
+        for (let c = 0; c < INVADER_COLS; c++) {
+          invaders.push(new Invader(startX + c * spacing, 80 + r * 50));
+        }
+      }
+    }
+
+    function startGame() {
+      gameState = "PLAYING";
+      score = 0;
+      lives = 3;
+      fireTimer = 0;
+      lastTime = performance.now();
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      startScreen.classList.add("hidden");
+      gameOverScreen.classList.add("hidden");
+
+      player = new Player();
+      projectiles = [];
+      particles = [];
+      stars = Array.from({ length: 40 }, () => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        s: Math.random() + 0.5
+      }));
+
+      spawnInvaders();
+      cancelAnimationFrame(animationId);
+      animationId = requestAnimationFrame(gameLoop);
+    }
+
+    function gameLoop(timestamp) {
+      if (gameState !== "PLAYING") return;
+      const delta = Math.min(timestamp - lastTime, 33);
+      lastTime = timestamp;
+
+      ctx.fillStyle = "#050505";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      stars.forEach(s => {
+        s.y += s.s * (delta / 16.6);
+        if (s.y > canvas.height) s.y = 0;
+        ctx.fillStyle = "#333";
+        ctx.fillRect(s.x, s.y, s.s, s.s);
+      });
+
+      player.update(delta);
+      player.draw();
+
+      let edge = false;
+      let currentSpeed = INVADER_SPEED + (score / 10000);
+
+      for (let i = invaders.length - 1; i >= 0; i--) {
+        const inv = invaders[i];
+        inv.update(invaderDirection * currentSpeed * (delta / 16.6));
+        inv.draw();
+
+        if (inv.x < 10 || inv.x + inv.width > canvas.width - 10) edge = true;
+
+        if (inv.y + inv.height > player.y + 10) {
+          endGame();
+          return;
+        }
+
+        if (Math.random() < 0.002) {
+          projectiles.push(new Projectile(inv.x + 15, inv.y + 30, 1, "#ff3366"));
+        }
+      }
+
+      if (edge) {
+        invaderDirection *= -1;
+        invaders.forEach(inv => inv.y += 15);
+      }
+
+      for (let i = projectiles.length - 1; i >= 0; i--) {
+        const p = projectiles[i];
+        p.update(delta);
+        p.draw();
+
+        if (p.dir === -1) {
+          for (let j = invaders.length - 1; j >= 0; j--) {
+            const inv = invaders[j];
+            if (p.x > inv.x && p.x < inv.x + inv.width && p.y > inv.y && p.y < inv.y + inv.height) {
+              for(let k=0;k<8;k++) particles.push(new Particle(inv.x+15, inv.y+15,"#ff3366"));
+              invaders.splice(j,1);
+              projectiles.splice(i,1);
+              score += 100;
+              scoreEl.textContent = score;
+              if(invaders.length===0) spawnInvaders();
+              break;
+            }
+          }
+        } else {
+          if(p.x>player.x && p.x<player.x+player.width && p.y>player.y && p.y<player.y+player.height){
+            for(let k=0;k<12;k++) particles.push(new Particle(player.x+22, player.y+22,"#00ffcc"));
+            projectiles.splice(i,1);
+            lives--;
+            livesEl.textContent = lives;
+            if(lives<=0) endGame();
+          }
+        }
+
+        if(p && (p.y<-20 || p.y>canvas.height+20)) projectiles.splice(i,1);
+      }
+
+      for(let i=particles.length-1;i>=0;i--){
+        particles[i].update();
+        particles[i].draw();
+        if(particles[i].alpha<=0) particles.splice(i,1);
+      }
+
+      animationId = requestAnimationFrame(gameLoop);
+    }
+
+    function endGame() {
+      gameState = "GAMEOVER";
+      finalScoreEl.textContent = `FINAL SCORE: ${score}`;
+      gameOverScreen.classList.remove("hidden");
+      cancelAnimationFrame(animationId);
+    }
+
+    // --- Service Worker Registration ---
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js")
+          .then(reg => console.log("Service Worker registered:", reg.scope))
+          .catch(err => console.error("Service Worker registration failed:", err));
+      });
+    }
+  </script>
+
+</body>
+</html>
